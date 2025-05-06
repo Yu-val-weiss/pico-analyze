@@ -32,6 +32,7 @@ class ConditionNumberMetric(BaseMetric):
         """
 
         # Compute the singular values of the input
+        component_layer_data = component_layer_data.to(torch.float32)
         singular_values = torch.svd(component_layer_data).S
 
         # Compute the condition number

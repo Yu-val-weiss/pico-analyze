@@ -44,6 +44,7 @@ class PERMetric(BaseMetric):
             float: The computed PER
         """
 
+        component_layer_data = component_layer_data.to(torch.float32)
         layer_singular_values = torch.svd(component_layer_data).S
 
         # standardize singular values
