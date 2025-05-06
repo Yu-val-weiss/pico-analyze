@@ -5,6 +5,8 @@ from typing import Any, Dict
 
 from src.components._registry import COMPONENT_REGISTRY
 from src.components.base import BaseComponent
+from src.components.lora import LoraComponent
+from src.components.lora_ov_circuit import LoraOVComponent
 from src.components.ov_circuit import OVComponent
 from src.components.simple import SimpleComponent
 
