@@ -41,4 +41,6 @@ class HoyerMetric(BaseMetric):
         # Compute the L1 and L2 norms of the component layer data
         l1_norm = torch.norm(component_layer_data, p=1).item()
         l2_norm = torch.norm(component_layer_data, p=2).item()
+        if l2_norm == 0:
+            return float("nan")
         return (math.sqrt(n) - l1_norm / l2_norm) / (math.sqrt(n) - 1)
