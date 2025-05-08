@@ -112,14 +112,10 @@ metrics:
           value_layer: "attention.v_proj"
         layers: [0,1,2,3,4,5,6,7,8,9,10,11]
 
-  
-
-  
-
 steps: 
-  start: 900
-  end: 20_000
-  step: 1000
+  start: 0
+  end: 20_100
+  step: 100
 
 monitoring: 
   output_dir: "analysis_results"
