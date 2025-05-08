@@ -1,0 +1,68 @@
+analysis_name: "tiny-ov-baseline-analysis"
+
+metrics: 
+
+  - metric_name: cka
+    target_checkpoint: 20_000
+    data_split: "val"
+    components: 
+      - component_name: ov_circuit
+        data_type: "activations"
+        layer_suffixes: 
+          output_layer: "attention.o_proj"
+          value_layer: "attention.v_proj"
+        layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+
+  - metric_name: per
+    data_split: "val"
+    components: 
+      - component_name: ov_circuit
+        data_type: "weights"
+        layer_suffixes: 
+          output_layer: "attention.o_proj"
+          value_layer: "attention.v_proj"
+        layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+
+  - metric_name: condition_number
+    data_split: "val"
+    components: 
+      - component_name: ov_circuit
+        data_type: "weights"
+        layer_suffixes: 
+          output_layer: "attention.o_proj"
+          value_layer: "attention.v_proj"
+        layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+
+  - metric_name: gini
+    data_split: "val"
+    components: 
+      - component_name: ov_circuit
+        data_type: "weights"
+        layer_suffixes: 
+          output_layer: "attention.o_proj"
+          value_layer: "attention.v_proj"
+        layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+  
+  - metric_name: norm
+    data_split: "val"
+    norm_type: "frobenius"
+    components: 
+      - component_name: ov_circuit
+        data_type: "weights"
+        layer_suffixes: 
+          output_layer: "attention.o_proj"
+          value_layer: "attention.v_proj"
+        layers: [0,1,2,3,4,5,6,7,8,9,10,11]
+
+steps: 
+  start: 0
+  end: 20_000
+  step: 1000
+
+monitoring: 
+  output_dir: "analysis_results"
+
+  save_to_wandb: true
+  wandb:
+    entity: "pico-lm"
+    project: "pico-relora"
