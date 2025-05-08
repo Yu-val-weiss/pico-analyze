@@ -10,13 +10,13 @@ from typing import Any, Dict
 import torch
 
 from src.components._registry import register_component
-from src.components.base import BaseComponent
+from src.components.base_lora import BaseLoraComponent
 from src.config.base import BaseComponentConfig
 from src.utils.exceptions import InvalidComponentError
 
 
 @register_component("lora_ov_circuit")
-class LoraOVComponent(BaseComponent):
+class LoraOVComponent(BaseLoraComponent):
     """
     LoraComponent multiplies the lora parameters at each checkpoint.
     """
@@ -104,28 +104,67 @@ class LoraOVComponent(BaseComponent):
             value_layer_prefix = f"{_model_prefix}{layer_idx}.{value_layer_id}"
             output_layer_prefix = f"{_model_prefix}{layer_idx}.{output_layer_id}"
 
-            layer_v_proj = (
-                _data[f"{value_layer_prefix}.B_lora"]
-                @ _data[f"{value_layer_prefix}.A_lora"]
-            )
-            layer_o_proj = (
-                _data[f"{output_layer_prefix}.B_lora"]
-                @ _data[f"{output_layer_prefix}.A_lora"]
-            )
-
             # NOTE: each computation is done 'per head' of the attention module, and return a
             # tuple of a dictionary mapping head indices to the OV component and a concatenated
             # tensor of the OV component
 
-            ov_comp_ph, ov_comp = self.compute_ov_weights(layer_v_proj, layer_o_proj)
+            lora_layer_v_proj = (
+                _data[f"{value_layer_prefix}.B_lora"]
+                @ _data[f"{value_layer_prefix}.A_lora"]
+            )
+            lora_layer_o_proj = (
+                _data[f"{output_layer_prefix}.B_lora"]
+                @ _data[f"{output_layer_prefix}.A_lora"]
+            )
 
-            for head_idx, ov_component_head in ov_comp_ph.items():
+            # LORA
+
+            lora_ov_comp_ph, lora_ov_comp = self.compute_ov_weights(
+                lora_layer_v_proj, lora_layer_o_proj
+            )
+
+            for head_idx, ov_component_head in lora_ov_comp_ph.items():
                 checkpoint_layer_component[
                     f"{_model_prefix}{layer_idx}.ov_circuit.lora.{component_config.data_type}.heads.{head_idx}"
                 ] = ov_component_head
 
             checkpoint_layer_component[
                 f"{_model_prefix}{layer_idx}.ov_circuit.lora.{component_config.data_type}"
-            ] = ov_comp
+            ] = lora_ov_comp
+
+            # BASE
+
+            base_layer_v_proj = _data[value_layer_prefix]
+            base_layer_o_proj = _data[output_layer_prefix]
+
+            base_ov_comp_ph, base_ov_comp = self.compute_ov_weights(
+                base_layer_v_proj, base_layer_o_proj
+            )
+
+            for head_idx, ov_component_head in base_ov_comp_ph.items():
+                checkpoint_layer_component[
+                    f"{_model_prefix}{layer_idx}.ov_circuit.base.{component_config.data_type}.heads.{head_idx}"
+                ] = ov_component_head
+
+            checkpoint_layer_component[
+                f"{_model_prefix}{layer_idx}.ov_circuit.base.{component_config.data_type}"
+            ] = base_ov_comp
+
+            # FULL
+            full_layer_v_proj = lora_layer_v_proj * self.lora_s + base_layer_v_proj
+            full_layer_o_proj = lora_layer_o_proj * self.lora_s + base_layer_o_proj
+
+            full_ov_comp_ph, full_ov_comp = self.compute_ov_weights(
+                full_layer_v_proj, full_layer_o_proj
+            )
+
+            for head_idx, ov_component_head in full_ov_comp_ph.items():
+                checkpoint_layer_component[
+                    f"{_model_prefix}{layer_idx}.ov_circuit.full.{component_config.data_type}.heads.{head_idx}"
+                ] = ov_component_head
+
+            checkpoint_layer_component[
+                f"{_model_prefix}{layer_idx}.ov_circuit.full.{component_config.data_type}"
+            ] = full_ov_comp
 
         return checkpoint_layer_component

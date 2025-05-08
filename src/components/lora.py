@@ -9,13 +9,13 @@ from typing import Any, Dict
 import torch
 
 from src.components._registry import register_component
-from src.components.base import BaseComponent
+from src.components.base_lora import BaseLoraComponent
 from src.config.base import BaseComponentConfig
 from src.utils.exceptions import InvalidComponentError
 
 
 @register_component("lora")
-class LoraComponent(BaseComponent):
+class LoraComponent(BaseLoraComponent):
     """
     LoraComponent multiplies the lora parameters at each checkpoint.
     """
@@ -68,5 +68,11 @@ class LoraComponent(BaseComponent):
             checkpoint_layer_component[
                 f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}.base.{component_config.data_type}"
             ] = base_component
+
+            full_component = base_component + lora_component * self.lora_s
+
+            checkpoint_layer_component[
+                f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}.full.{component_config.data_type}"
+            ] = full_component
 
         return checkpoint_layer_component
