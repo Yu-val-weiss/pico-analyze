@@ -173,6 +173,11 @@ class OVComponent(BaseComponent):
                 - A concatenated tensor of the OV component gradients.
         """
 
+        target_dtype = layer_output_projection.dtype
+        layer_value_gradient = layer_value_gradient.to(target_dtype)
+        layer_output_gradient = layer_output_gradient.to(target_dtype)
+        layer_value_projection = layer_value_projection.to(target_dtype)
+
         layer_ov_gradients_per_head = {}
 
         for head_idx in range(self.attention_n_heads):
