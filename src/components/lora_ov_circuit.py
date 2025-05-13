@@ -5,7 +5,7 @@ from the stored out checkpoint data without much additional computation.
 """
 
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import torch
 
@@ -34,7 +34,7 @@ class LoraOVComponent(BaseLoraComponent):
         """
         Lora components can only be weights.
         """
-        if component_config.data_type != "weights":
+        if component_config.data_type not in ("weights", "activations"):
             raise InvalidComponentError(
                 f"Simple component only supports weights not {component_config.data_type}."
             )
@@ -76,6 +76,62 @@ class LoraOVComponent(BaseLoraComponent):
 
         return layer_ov_weights_ph, layer_ov_weights
 
+    @lru_cache(maxsize=50)
+    def compute_ov_activations(
+        self,
+        layer_value_activation: torch.Tensor,
+        layer_output_projection: torch.Tensor,
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """
+        Compute the OV activations for a single layer. Uses a cache to speed up the computation,
+        if the component is used across multiple metrics.
+
+        NOTE: the OV-Circuit operates 'per head' of the attention module, so we compute the OV
+        activations for each head separately and then concatenate them together.
+
+        Args:
+            layer_value_activation: The value activations for the layer.
+            layer_output_projection: The output projection for the layer.
+
+        Returns:
+            A tuple:
+                - A dictionary mapping head indices to OV component activations.
+                - A concatenated tensor of the OV component activations.
+        """
+        layer_ov_activation_per_head = {}
+
+        for head_idx in range(self.attention_n_heads):
+            kv_head_idx = head_idx // (
+                self.attention_n_heads // self.attention_n_kv_heads
+            )
+
+            if layer_value_activation.dtype != layer_output_projection.dtype:
+                # NOTE: activations might be stored as memory efficient floats (e.g. bfloat16)
+                # so we need to make sure we cast to the same type as the weights
+                layer_value_activation = layer_value_activation.to(
+                    layer_output_projection.dtype
+                )
+
+            start_value_activation = kv_head_idx * self.attention_head_dim
+            end_value_activation = (kv_head_idx + 1) * self.attention_head_dim
+
+            ov_activation_per_head = (
+                layer_value_activation[:, start_value_activation:end_value_activation]
+                @ layer_output_projection[
+                    :,
+                    head_idx * self.attention_head_dim : (head_idx + 1)
+                    * self.attention_head_dim,
+                ].T
+            )
+
+            layer_ov_activation_per_head[f"{head_idx}"] = ov_activation_per_head
+
+        layer_ov_activation = torch.cat(
+            list(layer_ov_activation_per_head.values()), dim=1
+        )
+
+        return layer_ov_activation_per_head, layer_ov_activation
+
     def __call__(
         self,
         checkpoint_states: Dict[str, Dict[str, torch.Tensor]],
@@ -98,6 +154,7 @@ class LoraOVComponent(BaseLoraComponent):
         checkpoint_layer_component = {}
 
         _data = checkpoint_states[component_config.data_type]
+        _weights = checkpoint_states["weights"]
         _model_prefix = self.get_model_prefix(checkpoint_states)
 
         for layer_idx in component_config.layers:
@@ -108,20 +165,31 @@ class LoraOVComponent(BaseLoraComponent):
             # tuple of a dictionary mapping head indices to the OV component and a concatenated
             # tensor of the OV component
 
-            lora_layer_v_proj = (
-                _data[f"{value_layer_prefix}.B_lora"]
-                @ _data[f"{value_layer_prefix}.A_lora"]
-            )
+            if component_config.data_type == "weights":
+                # here it should be projection
+                lora_layer_v_val = (
+                    _data[f"{value_layer_prefix}.B_lora"]
+                    @ _data[f"{value_layer_prefix}.A_lora"]
+                )
+            else:
+                # for activation it should be the activation itself
+                # this is simply the activation at B_lora
+                lora_layer_v_val = _data[f"{value_layer_prefix}.B_lora"]
+
             lora_layer_o_proj = (
-                _data[f"{output_layer_prefix}.B_lora"]
-                @ _data[f"{output_layer_prefix}.A_lora"]
+                _weights[f"{output_layer_prefix}.B_lora"]
+                @ _weights[f"{output_layer_prefix}.A_lora"]
             )
 
             # LORA
-
-            lora_ov_comp_ph, lora_ov_comp = self.compute_ov_weights(
-                lora_layer_v_proj, lora_layer_o_proj
-            )
+            if component_config.data_type == "weights":
+                lora_ov_comp_ph, lora_ov_comp = self.compute_ov_weights(
+                    lora_layer_v_val, lora_layer_o_proj
+                )
+            else:
+                lora_ov_comp_ph, lora_ov_comp = self.compute_ov_activations(
+                    lora_layer_v_val, lora_layer_o_proj
+                )
 
             for head_idx, ov_component_head in lora_ov_comp_ph.items():
                 checkpoint_layer_component[
@@ -134,12 +202,17 @@ class LoraOVComponent(BaseLoraComponent):
 
             # BASE
 
-            base_layer_v_proj = _data[value_layer_prefix]
-            base_layer_o_proj = _data[output_layer_prefix]
+            base_layer_v_val = _data[value_layer_prefix]
+            base_layer_o_proj = _weights[output_layer_prefix]
 
-            base_ov_comp_ph, base_ov_comp = self.compute_ov_weights(
-                base_layer_v_proj, base_layer_o_proj
-            )
+            if component_config.data_type == "weights":
+                base_ov_comp_ph, base_ov_comp = self.compute_ov_weights(
+                    base_layer_v_val, base_layer_o_proj
+                )
+            else:
+                base_ov_comp_ph, base_ov_comp = self.compute_ov_activations(
+                    base_layer_v_val, base_layer_o_proj
+                )
 
             for head_idx, ov_component_head in base_ov_comp_ph.items():
                 checkpoint_layer_component[
@@ -151,12 +224,17 @@ class LoraOVComponent(BaseLoraComponent):
             ] = base_ov_comp
 
             # FULL
-            full_layer_v_proj = lora_layer_v_proj * self.lora_s + base_layer_v_proj
+            full_layer_v_val = lora_layer_v_val * self.lora_s + base_layer_v_val
             full_layer_o_proj = lora_layer_o_proj * self.lora_s + base_layer_o_proj
 
-            full_ov_comp_ph, full_ov_comp = self.compute_ov_weights(
-                full_layer_v_proj, full_layer_o_proj
-            )
+            if component_config.data_type == "weights":
+                full_ov_comp_ph, full_ov_comp = self.compute_ov_weights(
+                    full_layer_v_val, full_layer_o_proj
+                )
+            else:
+                full_ov_comp_ph, full_ov_comp = self.compute_ov_activations(
+                    full_layer_v_val, full_layer_o_proj
+                )
 
             for head_idx, ov_component_head in full_ov_comp_ph.items():
                 checkpoint_layer_component[

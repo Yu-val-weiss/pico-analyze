@@ -24,10 +24,33 @@ class LoraComponent(BaseLoraComponent):
         """
         Lora components can only be weights.
         """
-        if component_config.data_type != "weights":
+        if component_config.data_type not in ["weights", "activations"]:
             raise InvalidComponentError(
                 f"Simple component only supports weights not {component_config.data_type}."
             )
+
+    def _calc_weights(self, data, layer_prefix: str):
+        A_lora = data[f"{layer_prefix}.A_lora"]
+        B_lora = data[f"{layer_prefix}.B_lora"]
+
+        lora_component = B_lora @ A_lora
+
+        base_component = data[layer_prefix]
+
+        full_component = base_component + lora_component * self.lora_s
+
+        return base_component, lora_component, full_component
+
+    def _calc_activations(self, data, layer_prefix: str):
+        B_lora = data[f"{layer_prefix}.B_lora"]
+
+        base_component = data[layer_prefix]
+
+        lora_component = B_lora  # output activation
+
+        full_component = base_component + lora_component * self.lora_s
+
+        return base_component, lora_component, full_component
 
     def __call__(
         self,
@@ -54,22 +77,23 @@ class LoraComponent(BaseLoraComponent):
             layer_prefix = (
                 f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}"
             )
-            A_lora = _data[f"{layer_prefix}.A_lora"]
-            B_lora = _data[f"{layer_prefix}.B_lora"]
 
-            lora_component = B_lora @ A_lora
-
-            checkpoint_layer_component[
-                f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}.lora.{component_config.data_type}"
-            ] = lora_component
-
-            base_component = _data[layer_prefix]
+            if component_config.data_type == "weights":
+                base_component, lora_component, full_component = self._calc_weights(
+                    _data, layer_prefix
+                )
+            elif component_config.data_type == "activations":
+                base_component, lora_component, full_component = self._calc_activations(
+                    _data, layer_prefix
+                )
 
             checkpoint_layer_component[
                 f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}.base.{component_config.data_type}"
             ] = base_component
 
-            full_component = base_component + lora_component * self.lora_s
+            checkpoint_layer_component[
+                f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}.lora.{component_config.data_type}"
+            ] = lora_component
 
             checkpoint_layer_component[
                 f"{_model_prefix}{layer_idx}.{component_config.layer_suffixes}.full.{component_config.data_type}"
