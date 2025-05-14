@@ -156,6 +156,8 @@ def pretty_print_component_metrics(
                 value = components[component_name]
                 if math.isnan(value):
                     bar_length = 0
+                elif math.isinf(value):
+                    bar_length = 20
                 else:
                     bar_length = min(round(value * 20), 20)
                 bar = "█" * bar_length + "░" * (20 - bar_length)

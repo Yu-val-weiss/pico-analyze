@@ -3,6 +3,7 @@ Condition number is the ratio of the largest to smallest singular value of the i
 """
 
 import torch
+from torch.linalg import svdvals
 
 from src.config.base import BaseComponentConfig
 from src.metrics._registry import register_metric
@@ -33,9 +34,15 @@ class ConditionNumberMetric(BaseMetric):
 
         # Compute the singular values of the input
         component_layer_data = component_layer_data.to(torch.float32)
-        singular_values = torch.svd(component_layer_data).S
 
-        # Compute the condition number
-        condition_number = torch.max(singular_values) / torch.min(singular_values)
+        try:
+            singular_values: torch.Tensor = svdvals(component_layer_data)
 
-        return condition_number.item()
+            # Compute the condition number
+            condition_number = singular_values.max() / singular_values.min()
+
+            return condition_number.item()
+
+        except Exception as e:
+            print(f"Warning: SVD computation failed: {str(e)}")
+            return float("inf")
